@@ -1,0 +1,17 @@
+#include "resource.h"
+#include <opencv2/core/core.hpp>
+#include <objidl.h>
+#include <windows.h>
+#include <string>
+#include <optional>
+#include <iostream>
+#include <gdiplus.h>
+#include <psapi.h>
+#include <commctrl.h>
+#include <tchar.h>
+#include <map>
+#include <tesseract/baseapi.h>
+#include <tesseract/renderer.h>
+#include <leptonica/allheaders.h>
+#include <locale>
+#include <codecvt>
