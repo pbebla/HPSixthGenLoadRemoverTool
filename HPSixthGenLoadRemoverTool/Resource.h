@@ -20,6 +20,15 @@
 #define ID_START              116
 #define ID_STOP              117
 #define ID_PRINT             118
+#define ID_PREVIEW           119
+#define ID_MENU               120
+#define ID_FILE_OPEN          121
+#define ID_IMAGE_LOAD         127
+#define ID_FILE_SAVE          122
+#define ID_FILE_SAVE_AS       123
+#define IDM_RUN_UPDOWN        124
+#define IDD_UPDOWN            125
+#define IDC_PSNR              126
 #define IDC_MYICON				2
 #ifndef IDC_STATIC
 #define IDC_STATIC				-1

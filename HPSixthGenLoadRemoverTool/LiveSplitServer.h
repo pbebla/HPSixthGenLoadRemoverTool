@@ -15,21 +15,16 @@
 #pragma comment(lib, "Ws2_32.lib")
 
 #define DEFAULT_BUFLEN 512
-#define DEFAULT_PORT "16834"
 class LiveSplitServer
 {
 private:
-	WSADATA wsaData;
-	SOCKET ConnectSocket;
-	int iResult;
-	struct addrinfo* result = NULL, * ptr = NULL, hints;
 	bool isLoading;
+	HANDLE pipe;
 public:
 	LiveSplitServer();
-	void try_connection();
-	int ls_connect();
+	BOOL open_pipe();
 	int send_to_ls(std::string message);
-	int ls_close();
+	void close_pipe();
 	bool get_isLoading();
 	void set_isLoading(bool);
 	

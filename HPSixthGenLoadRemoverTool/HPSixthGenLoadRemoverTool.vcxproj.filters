@@ -30,16 +30,10 @@
     <ClInclude Include="LiveSplitServer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="getopt.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="unistd.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="DrawablePicture.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="WindowLayout.h">
+    <ClInclude Include="getopt.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -51,12 +45,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="getopt.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="DrawablePicture.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="WindowLayout.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

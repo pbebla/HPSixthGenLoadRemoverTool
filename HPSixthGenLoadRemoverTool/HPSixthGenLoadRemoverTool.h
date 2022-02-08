@@ -1,5 +1,5 @@
 #include "resource.h"
-#include <opencv2/core/core.hpp>
+#include <opencv2/opencv.hpp>
 #include <objidl.h>
 #include <windows.h>
 #include <string>
@@ -15,3 +15,5 @@
 #include <leptonica/allheaders.h>
 #include <locale>
 #include <codecvt>
+#include <shobjidl.h> 
+#include <d2d1.h>
