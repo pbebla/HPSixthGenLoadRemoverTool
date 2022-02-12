@@ -5,8 +5,8 @@
 #include "framework.h"
 #include "HPSixthGenLoadRemoverTool.h"
 #include "LiveSplitServer.h"
-#pragma comment(lib, "ComCtl32.Lib");
-#pragma comment (lib, "Psapi.lib");
+#pragma comment(lib, "ComCtl32.Lib")
+#pragma comment (lib, "Psapi.lib")
 #pragma comment (lib,"Gdiplus.lib")
 #pragma comment(linker,"\"/manifestdependency:type='win32' \
 name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
@@ -25,51 +25,70 @@ processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 #if(_WIN32_WINNT >= 0x0603)
 #define PW_RENDERFULLCONTENT    0x00000002
 #endif /* _WIN32_WINNT >= 0x0603 */
-//using namespace System;
 // Global Variables:
-cv::Mat hp3 = cv::imread("C:\\Users\\Pauldin\\hp3sixthgen\\hp3sixthgen\\imgs\\loading.png");
+cv::Mat cvMat, refMat, resized, grayResized, diff;
 HMENU hMenu;
 HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 BOOL fDrawRect;   // TRUE if bitmap rect. is dragged  
-HWND hwndButton5, hwndStart, hwndStop, hwndPrint, hwndProcessList, hwndDrawableCanvas, hwndPreviewCanvas, hwndPause, hwndUnpause, hwndPSNR, hwndImage;
+HWND selHwnd, hwndButton5, hwndStart, hwndStop, hwndPrint, hwndProcessList, hwndDrawableCanvas, hwndPreviewCanvas, hwndPSNR, hwndThreshold, hwndToggle;
+HWND savedX, savedY, savedW, savedH;
 LiveSplitServer server;
-HWND selHwnd;
 Gdiplus::GdiplusStartupInput gdiplusStartupInput;
 ULONG_PTR           gdiplusToken;
-RECT rcTarget;    // rectangle to receive bitmap 
+RECT selRect, rcTarget;    // rectangle to receive bitmap 
 POINT pt;         // x and y coordinates of cursor 
-int convertedX, convertedY, convertedWidth, convertedHeight;
+int convertedX, convertedY, convertedWidth, convertedHeight, intSavedX, intSavedY, intSavedW, intSavedH;
+float threshold;
 INITCOMMONCONTROLSEX icex;    // Structure for control initialization.
-bool isInitialLoad = true;
+bool isInitialLoad, showPreview;
 const UINT valMin = 0;          // The range of values for the Up-Down control.
-const UINT valMax = GetSystemMetrics(SM_CXSCREEN);
-HRESULT hr;
-HBITMAP refBmp;
+const UINT valMax = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+Gdiplus::Bitmap* refBmp;
 UINT cyVScroll;              // Height of scroll bar arrow.
-HWND hControl; // Handles to the controls.
-HWND hwndUpDnEdtBdyX = NULL;
-HWND hwndUpDnCtlX = NULL;
-HWND hwndUpDnEdtBdyY = NULL;
-HWND hwndUpDnCtlY = NULL;
-HWND hwndUpDnEdtBdyW = NULL;
-HWND hwndUpDnCtlW = NULL;
-HWND hwndUpDnEdtBdyH = NULL;
-HWND hwndUpDnCtlH = NULL;
-cv::Mat cvMat;
-   // Handles to the create controls functions.
-HWND CreateUpDnBuddy(HWND, int, int);
-HWND CreateUpDnCtl(HWND);
-RECT selRect;
+HRESULT hr;
+typedef struct tagMonData
+{
+    int current;
+    MONITORINFOEXW* info;
+} MonData;
+
+typedef struct SaveData {
+    float threshold;
+    int rectLeft, rectTop, rectRight, rectBottom;
+    PWSTR pszFilePath;
+} SaveData;
+
+struct BufferPSNR                                     // Optimized CUDA versions
+{   // Data allocations are very expensive on CUDA. Use a buffer to solve: allocate once reuse later.
+    cv::cuda::GpuMat gI1, gI2, gs, t1, t2;
+    cv::cuda::GpuMat buf;
+};
+struct BufferMSSIM                                     // Optimized CUDA versions
+{   // Data allocations are very expensive on CUDA. Use a buffer to solve: allocate once reuse later.
+    cv::cuda::GpuMat gI1, gI2, gs, t1, t2;
+    cv::cuda::GpuMat I1_2, I2_2, I1_I2;
+    std::vector<cv::cuda::GpuMat> vI1, vI2;
+    cv::cuda::GpuMat mu1, mu2;
+    cv::cuda::GpuMat mu1_2, mu2_2, mu1_mu2;
+    cv::cuda::GpuMat sigma1_2, sigma2_2, sigma12;
+    cv::cuda::GpuMat t3;
+    cv::cuda::GpuMat ssim_map;
+    cv::cuda::GpuMat buf;
+};
+bool hasCuda;
+PWSTR filePath, saveFilePath;
+WCHAR* selDisplay;
+int selDisplayIndex;
+HWND hControl, hwndUpDnEdtBdyX, hwndUpDnCtlX, hwndUpDnEdtBdyY, hwndUpDnCtlY, hwndUpDnEdtBdyW, hwndUpDnCtlW, hwndUpDnEdtBdyH, hwndUpDnCtlH; // Handles to the controls.
 HANDLE loadRemover;
 DWORD loadRemoverId;
-BITMAP selBmp;
-typedef std::vector<std::pair<HDC, RECT>> device_hdc;
-typedef std::map<HMONITOR, device_hdc> device_hdc_map;
-device_hdc monitors;
+MonData monitors;
 static bool isThreadWorking = false;
-char selText[10];
+// Handles to the create controls functions.
+HWND CreateUpDnBuddy(HWND, int, int);
+HWND CreateUpDnCtl(HWND, int, int, const wchar_t*);
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 void                MyRegisterDrawCanvasClass(HINSTANCE hInstance);
@@ -80,17 +99,27 @@ LRESULT CALLBACK    DrawCanvasProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK    PrevCanvasProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    UpDownDialogProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
+bool CALLBACK SetFont(HWND child, LPARAM font);
 void PopulateProcessList();
 BOOL CALLBACK enumWindowCallback(HWND, LPARAM);
-void CaptureAnImage(HWND, HWND, bool, bool, bool);
+void CaptureAnImage(HWND, HWND, bool);
 DWORD WINAPI LoadRemover(LPVOID);
 BOOL CALLBACK MonitorEnumProc(HMONITOR, HDC, LPRECT, LPARAM);
 void AddMenus(HWND);
-void OpenFile();
 void SaveFile();
-void SaveFileAs();
+void SaveFileAs(HWND);
 float GetPSNR(HWND);
-void LoadRefImage();
+void LoadFile(HWND, bool);
+void mainDraw();
+void Resize(int left, int top, int right, int bottom);
+void GrabMat(HWND hwnd);
+void RenderRefImage(HWND);
+void CalculateDim();
+void DisplayDiff();
+std::wstring GetMatType(const cv::Mat& mat);
+std::wstring GetMatDepth(const cv::Mat& mat);
+double getPSNR_CUDA_optimized(const cv::Mat&, const cv::Mat&, BufferPSNR&);
+float getMSSIM_CUDA_optimized(const cv::Mat& i1, const cv::Mat& i2, BufferMSSIM& b);
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
                      _In_ LPWSTR    lpCmdLine,
@@ -99,27 +128,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
-    // Initialize GDI+.
     GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
-    // TODO: Place code here.
-    // Initialize global strings
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_HPSIXTHGENLOADREMOVERTOOL, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
     MyRegisterDrawCanvasClass(hInstance);
     MyRegisterPreviewCanvasClass(hInstance);
     server = LiveSplitServer();
-    // Perform application initialization:
+    isInitialLoad = true;
+    showPreview = true;
+    hasCuda = (cv::cuda::getCudaEnabledDeviceCount() > 0);
     if (!InitInstance (hInstance, nCmdShow))
     {
         return FALSE;
     }
-
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_HPSIXTHGENLOADREMOVERTOOL));
-
     MSG msg;
-
-    // Main message loop:
     while (GetMessage(&msg, nullptr, 0, 0))
     {
         if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
@@ -128,15 +152,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
             DispatchMessage(&msg);
         }
     }
-
     return (int) msg.wParam;
 }
 
 void MyRegisterDrawCanvasClass(HINSTANCE hInstance) {
     WNDCLASSEXW wcex_drawCanvas;
-
     wcex_drawCanvas.cbSize = sizeof(WNDCLASSEX);
-
     wcex_drawCanvas.style = CS_HREDRAW | CS_VREDRAW;
     wcex_drawCanvas.lpfnWndProc = DrawCanvasProc;
     wcex_drawCanvas.cbClsExtra = 0;
@@ -177,18 +198,11 @@ void MyRegisterPreviewCanvasClass(HINSTANCE hInstance) {
     }
 }
 
-//
-//  FUNCTION: MyRegisterClass()
-//
-//  PURPOSE: Registers the window class.
-//
 ATOM MyRegisterClass(HINSTANCE hInstance)
 {
     WNDCLASSEXW wcex;
-
     wcex.cbSize = sizeof(WNDCLASSEX);
-
-    wcex.style          = CS_HREDRAW | CS_VREDRAW;
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
     wcex.lpfnWndProc    = WndProc;
     wcex.cbClsExtra     = 0;
     wcex.cbWndExtra     = 0;
@@ -199,53 +213,27 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
     wcex.lpszMenuName   = MAKEINTRESOURCEW(IDC_HPSIXTHGENLOADREMOVERTOOL);
     wcex.lpszClassName  = szWindowClass;
     wcex.hIconSm        = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
-
     return RegisterClassExW(&wcex);
 }
 
-//
-//   FUNCTION: InitInstance(HINSTANCE, int)
-//
-//   PURPOSE: Saves instance handle and creates main window
-//
-//   COMMENTS:
-//
-//        In this function, we save the instance handle in a global variable and
-//        create and display the main program window.
-//
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
    hInst = hInstance; // Store instance handle in our global variable
 
-   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
+   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
       CW_USEDEFAULT, 0, 990, 540, nullptr, nullptr, hInstance, nullptr);
 
    if (!hWnd)
    {
       return FALSE;
    }
-   
-
+   EnumChildWindows(hWnd, (WNDENUMPROC)SetFont, (LPARAM)GetStockObject(DEFAULT_GUI_FONT));
    ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);
 
    return TRUE;
 }
-PAINTSTRUCT ps2;
-POINT p;
-COLORREF color = RGB(255, 255, 255);
-HBRUSH brush = CreateSolidBrush(NULL_BRUSH);
-HPEN pen = CreatePen(PS_SOLID, 5, NULL_PEN);
-//
-//  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
-//
-//  PURPOSE: Processes messages for the main window.
-//
-//  WM_COMMAND  - process the application menu
-//  WM_PAINT    - Paint the main window
-//  WM_DESTROY  - post a quit message and return
-//
-//
+
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     
@@ -260,34 +248,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 WS_VISIBLE | WS_CHILD,
                 900,
                 150,
-                150,
+                70,
                 20,
                 hWnd,
                 (HMENU)IDC_PSNR,
                 (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
                 NULL);
-            hwndPause = CreateWindowW(
-                L"BUTTON",  // Predefined class; Unicode assumed 
-                L"Pause to Livesplit",      // Button text 
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
-                0,         // x position 
-                100,         // y position 
-                150,        // Button width
-                20,        // Button height
-                hWnd,     // Parent window
-                (HMENU)ID_HWNDBUTTON2,       // No menu.
-                (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
-                NULL);
-            hwndUnpause = CreateWindowW(
-                L"BUTTON",  // Predefined class; Unicode assumed 
-                L"Unpause to Livesplit",      // Button text 
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
-                0,         // x position 
-                125,         // y position 
-                150,        // Button width
-                20,        // Button height
-                hWnd,     // Parent window
-                (HMENU)ID_HWNDBUTTON3,       // No menu.
+            hwndThreshold = CreateWindowW(
+                L"EDIT",
+                TEXT(""),
+                WS_VISIBLE | WS_CHILD | WS_BORDER,
+                900,
+                175,
+                70,
+                20,
+                hWnd,
+                (HMENU)IDC_PSNR,
                 (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
                 NULL);
             hwndStart = CreateWindowW(
@@ -316,7 +292,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 NULL);      // Pointer not needed.
             hwndPrint = CreateWindowW(
                 L"BUTTON",  // Predefined class; Unicode assumed 
-                L"Save Preview",      // Button text 
+                L"Show Difference Image",      // Button text 
                 WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
                 0,         // x position 
                 75,         // y position 
@@ -324,6 +300,66 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 20,        // Button height
                 hWnd,     // Parent window
                 (HMENU)ID_PRINT,       // No menu.
+                (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
+                NULL);      // Pointer not needed.
+            hwndToggle = CreateWindowW(
+                L"BUTTON",  // Predefined class; Unicode assumed 
+                L"Disable Preview",      // Button text 
+                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,  // Styles 
+                0,         // x position 
+                100,         // y position 
+                150,        // Button width
+                20,        // Button height
+                hWnd,     // Parent window
+                (HMENU)ID_TOGGLE,       // No menu.
+                (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
+                NULL);      // Pointer not needed.
+            savedX = CreateWindowW(
+                L"STATIC",  // Predefined class; Unicode assumed 
+                L"",      // Button text 
+                WS_VISIBLE | WS_CHILD,  // Styles 
+                0,         // x position 
+                125,         // y position 
+                100,        // Button width
+                20,        // Button height
+                hWnd,     // Parent window
+                NULL,       // No menu.
+                (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
+                NULL);      // Pointer not needed.
+            savedY = CreateWindowW(
+                L"STATIC",  // Predefined class; Unicode assumed 
+                L"",      // Button text 
+                WS_VISIBLE | WS_CHILD,  // Styles 
+                105,         // x position 
+                125,         // y position 
+                100,        // Button width
+                20,        // Button height
+                hWnd,     // Parent window
+                NULL,       // No menu.
+                (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
+                NULL);      // Pointer not needed.
+            savedW = CreateWindowW(
+                L"STATIC",  // Predefined class; Unicode assumed 
+                L"",      // Button text 
+                WS_VISIBLE | WS_CHILD,  // Styles 
+                210,         // x position 
+                125,         // y position 
+                100,        // Button width
+                20,        // Button height
+                hWnd,     // Parent window
+                NULL,       // No menu.
+                (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
+                NULL);      // Pointer not needed.
+            savedH = CreateWindowW(
+                L"STATIC",  // Predefined class; Unicode assumed 
+                L"",      // Button text 
+                WS_VISIBLE | WS_CHILD,  // Styles 
+                315,         // x position 
+                125,         // y position 
+                100,        // Button width
+                20,        // Button height
+                hWnd,     // Parent window
+                NULL,       // No menu.
                 (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
                 NULL);      // Pointer not needed.
             //EnableWindow(hwndStop, false);
@@ -370,16 +406,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 (HMENU)ID_PREVIEW,
                 GetModuleHandle(NULL),
                 NULL);
-            hwndImage = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                L"Static",
-                L"Picture Box",
-                WS_CHILD | SS_BITMAP | WS_BORDER | WS_VISIBLE,
-                705, 5, 50, 50,
-                hWnd,
-                NULL,
-                (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE),
-                NULL);
             EnableWindow(hwndStop, false);
             break;
         }
@@ -391,30 +417,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             wchar_t buf[100];
             // Parse the menu selections:
             swprintf(buf, _countof(buf), L"WM_COMMAND %d %d\n", hWmID, CBN_SELCHANGE);
-            OutputDebugStringW(buf);
-
             if (hWmID == CBN_SELCHANGE) {
-                OutputDebugStringW(L"CBN_SELCHANGE\n");
                 int ItemIndex = SendMessage((HWND)lParam, (UINT)CB_GETCURSEL,
                     (WPARAM)0, (LPARAM)0);
+                selDisplayIndex = ItemIndex;
                 LPWSTR ListItem[256];
-                
                 (TCHAR)SendMessage((HWND)lParam, (UINT)CB_GETLBTEXT,
                     (WPARAM)ItemIndex, (LPARAM)ListItem);
                 //DBOUT("ListItem " << ListItem << "\n");
-                if (wcsstr((wchar_t*)ListItem, L"Screen")) {
-                    CaptureAnImage(hwndDrawableCanvas, NULL, false, false, false);
+                if (wcsstr((wchar_t*)ListItem, L"\\\\.\\DISPLAY")) {
+                    selDisplay = monitors.info[ItemIndex].szDevice;
+                    CaptureAnImage(hwndDrawableCanvas, NULL, false);
                     selHwnd = NULL;
                 }
                 else {
                     selHwnd = FindWindowW(NULL, (LPCWSTR)ListItem);
                 }
-                
                 if (selHwnd == NULL) {
-                    selRect = RECT{ 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
-                    //wchar_t error[40] = { 0 };
-                    //swprintf(error, _countof(error), L"Error Registering Child %d\n", GetLastError());
-                    //MessageBox(NULL, (LPCWSTR)error, TEXT("Error..."), MB_OK | MB_ICONERROR);
+                    selRect = RECT{ 0, 0, monitors.info[ItemIndex].rcMonitor.right - monitors.info[ItemIndex].rcMonitor.left, monitors.info[ItemIndex].rcMonitor.bottom - monitors.info[ItemIndex].rcMonitor.top };
                 }
                 else {
                     GetClientRect(selHwnd, &selRect);
@@ -422,53 +442,54 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 isInitialLoad = false;
                 SendMessage(hwndDrawableCanvas, WM_PAINT, 0, 0);
                 if (!IsRectEmpty(&rcTarget)) {
-                    convertedX = (rcTarget.left * (selRect.right - selRect.left) / CANVAS_WIDTH);
-                    convertedY = (rcTarget.top * (selRect.bottom - selRect.top) / CANVAS_HEIGHT);
-                    convertedWidth = ((selRect.right - selRect.left) * (rcTarget.right - rcTarget.left)) / CANVAS_WIDTH;
-                    convertedHeight = ((selRect.bottom - selRect.top) * (rcTarget.bottom - rcTarget.top)) / CANVAS_HEIGHT;
-                    SendMessage(hwndUpDnCtlX, UDM_SETPOS, 0, convertedX);
-                    SendMessage(hwndUpDnCtlY, UDM_SETPOS, 0, convertedY);
-                    SendMessage(hwndUpDnCtlW, UDM_SETPOS, 0, convertedWidth);
-                    SendMessage(hwndUpDnCtlH, UDM_SETPOS, 0, convertedHeight);
+                    CalculateDim();
+                    if (intSavedX != NULL) {
+                        int range = 5;
+                        if (std::abs(intSavedX - convertedX) <= range && std::abs(intSavedY - convertedY) <= range && std::abs(intSavedW - convertedWidth) <= range && std::abs(intSavedH - convertedHeight) <= range) {
+                            convertedX = intSavedX;
+                            convertedY = intSavedY;
+                            convertedWidth = intSavedW;
+                            convertedHeight = intSavedH;
+                            SendMessage(hwndUpDnCtlX, UDM_SETPOS, 0, convertedX);
+                            SendMessage(hwndUpDnCtlY, UDM_SETPOS, 0, convertedY);
+                            SendMessage(hwndUpDnCtlW, UDM_SETPOS, 0, convertedWidth);
+                            SendMessage(hwndUpDnCtlH, UDM_SETPOS, 0, convertedHeight);
+                        }
+                    }
                 }
-            }
-            if (hWmID == STN_CLICKED && wmId == ID_PREVIEW) {
-                OutputDebugStringW(L"ID_PREVIEW\n");
-                GetCursorPos(&p);
-                ScreenToClient(hwndPreviewCanvas, &p);
-                HDC hdcDraw = GetDC(hwndPreviewCanvas);
-                color = GetPixel(hdcDraw, p.x, p.y);
-                DBOUT(color << "\n");
-                brush = CreateSolidBrush(color);
-                DBOUT(GetRValue(color) << " " << GetGValue(color) << " " << GetBValue(color) << "\n");
-                ReleaseDC(hwndPreviewCanvas, hdcDraw);
-                
+                mainDraw();
             }
             switch (wmId)
             {
             case ID_FILE_OPEN:
-                OpenFile();
+                LoadFile(hWnd, false);
                 break;
             case ID_IMAGE_LOAD:
-                LoadRefImage();
+                LoadFile(hWnd, true);
                 break;
             case ID_FILE_SAVE:
                 SaveFile();
                 break;
             case ID_FILE_SAVE_AS:
-                SaveFileAs();
+                SaveFileAs(hWnd);
+                break;
+            case ID_TOGGLE:
+                showPreview = !showPreview;
+                EnableWindow(hwndPreviewCanvas, showPreview);
+                if (showPreview) {
+                    SetWindowText(hwndToggle, L"Disable Preview");
+                    mainDraw();
+                }
+                else {
+                    SetWindowText(hwndToggle, L"Enable Preview");
+                    InvalidateRect(hwndPreviewCanvas, NULL, true);
+                }
                 break;
             case IDM_ABOUT:
                 DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
                 break;
             case IDM_EXIT:
                 DestroyWindow(hWnd);
-                break;
-            case ID_HWNDBUTTON2:
-                server.send_to_ls("pausegametime\r\n");
-                break;
-            case ID_HWNDBUTTON3:
-                server.send_to_ls("unpausegametime\r\n");
                 break;
             case ID_HWNDBUTTON5:
                 PopulateProcessList();
@@ -480,6 +501,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     break;
                 }
                 if (!IsRectEmpty(&rcTarget)) {
+                    TCHAR buff[MAX_LOADSTRING];
+                    GetWindowText(hwndThreshold, buff, MAX_LOADSTRING);
+                    threshold = _tstof(buff);
+                    
                     isThreadWorking = true;
                     loadRemover = CreateThread(
                         NULL,                   // default security attributes
@@ -495,6 +520,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     }
                     EnableWindow(hwndStart, false);
                     EnableWindow(hwndStop, true);
+                    EnableWindow(hwndThreshold, false);
                 }
                 break;
             case ID_STOP:
@@ -503,23 +529,30 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 CloseHandle(loadRemover);
                 EnableWindow(hwndStop, false);
                 EnableWindow(hwndStart, true);
+                EnableWindow(hwndThreshold, true);
                 server.close_pipe();
                 break;
             case ID_PRINT:
-                CaptureAnImage(selHwnd, (HWND)NULL, false, false, true);
+                if (!cvMat.empty() && !diff.empty()) {
+                    //cv::imwrite("test.png", diff);
+                    cv::imshow("Diff", diff);
+                }
                 break;
             }
-            
         }
         break;
     case WM_PAINT:
         {
-            DBOUT("WM_PAINT Main\n");
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
+            Gdiplus::Graphics gf(hdc);
+            gf.DrawImage(refBmp, 605, 25, 145*CANVAS_WIDTH/CANVAS_HEIGHT, 145);
             EndPaint(hWnd, &ps);
             break;
         }
+    case WM_SIZE:
+        mainDraw();
+        break;
     case WM_DESTROY:
         DWORD ret;
         if (GetExitCodeThread(loadRemover, &ret)) {
@@ -529,31 +562,21 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 CloseHandle(loadRemover);
             }
         }
-        DeleteObject(brush);
-        DeleteObject(pen);
         PostQuitMessage(0);
         break;
     case WM_NOTIFY:
     {
-        //FIX
         UINT nCode = ((LPNMHDR)lParam)->code;
         switch (nCode) {
         case UDN_DELTAPOS:
             LPNMUPDOWN lpnmud = (LPNMUPDOWN)lParam;
             if (!IsRectEmpty(&rcTarget)) {
-                DBOUT("Before: " << rcTarget.left << " " << rcTarget.top << " " << rcTarget.right << " " << rcTarget.bottom << std::endl);
-                //convertedX = (rcTarget.left * (selRect.right - selRect.left) / CANVAS_WIDTH);
-                //convertedY = (rcTarget.top * (selRect.bottom - selRect.top) / CANVAS_HEIGHT);
-                //convertedWidth = ((selRect.right - selRect.left) * (rcTarget.right - rcTarget.left)) / CANVAS_WIDTH;
-                //convertedHeight = ((selRect.bottom - selRect.top) * (rcTarget.bottom - rcTarget.top)) / CANVAS_HEIGHT;
-
                 int l = rcTarget.left;
                 int t = rcTarget.top;
                 int r = rcTarget.right;
                 int b = rcTarget.bottom;
                 int newPos = lpnmud->iPos + lpnmud->iDelta;
-                InvalidateRect(hWnd, NULL, true);
-                
+                InvalidateRect(hWnd, NULL, false);
                 if (lpnmud->hdr.hwndFrom == hwndUpDnCtlX) {
                     convertedX = newPos;
                     l = CANVAS_WIDTH * convertedX / (selRect.right - selRect.left);
@@ -572,22 +595,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                     convertedHeight = newPos;
                     b = t + (CANVAS_HEIGHT * convertedHeight / (selRect.bottom - selRect.top));
                 }
-                SetRect(&rcTarget, l, t, r, b);
-                DBOUT("After: " << rcTarget.left << " " << rcTarget.top << " " << rcTarget.right << " " << rcTarget.bottom << std::endl);
+                Resize(l, t, r, b);
             }
+            mainDraw();
             break;
-        }
-        break;
-    }
-    case WM_CTLCOLORSTATIC:
-    {
-        if (hwndPreviewCanvas == (HWND)lParam) {
-            OutputDebugStringW(L"COLORSTATIC Preview\n");
-            return (INT_PTR)NULL;
-        }
-        else {
-            return DefWindowProc(hWnd, message, wParam, lParam);
-            
         }
         break;
     }
@@ -595,6 +606,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return DefWindowProc(hWnd, message, wParam, lParam);
     }
     return 0;
+}
+
+bool CALLBACK SetFont(HWND child, LPARAM font) {
+    SendMessage(child, WM_SETFONT, font, true);
+    return true;
 }
 
 LRESULT CALLBACK DrawCanvasProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -615,88 +631,33 @@ LRESULT CALLBACK DrawCanvasProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
     {
     case WM_CREATE:
     {
-        //DBOUT("WM_CREATE Draw\n");
-        // Create a device context (DC) to hold the bitmap.  
-        // The bitmap is copied from this DC to the window's DC  
-        // whenever it must be drawn.  
-
         hdc = GetDC(hWnd);
         hdcCompat = CreateCompatibleDC(hdc);
-
-        // Create a brush of the same color as the background  
-        // of the client area. The brush is used later to erase  
-        // the old bitmap before copying the bitmap into the  
-        // target rectangle.  
-
         crBkgnd = GetBkColor(hdc);
         hbrBkgnd = CreateSolidBrush(COLORREF(NULL_BRUSH));
         ReleaseDC(hWnd, hdc);
-
-        // Create a dotted pen. The pen is used to draw the  
-        // bitmap rectangle as the user drags it.  
-
-        //hpenDot = CreatePen(PS_DOT, 1, RGB(0, 0, 0));
         break;
     }
     case WM_PAINT:
     {
         hdc = BeginPaint(hWnd, &ps);
-        if (!isInitialLoad) {
-            CaptureAnImage(hwndDrawableCanvas, selHwnd, false, false, false);
-            CaptureAnImage(hwndPreviewCanvas, selHwnd, true, false, false);
-            if (!IsRectEmpty(&rcTarget) && convertedWidth > 0 && convertedHeight > 0) {
-                GetPSNR(selHwnd);
-            }
-            
-        }
         EndPaint(hWnd, &ps);
         ReleaseDC(hWnd, hdc);
         break;
     }
     case WM_LBUTTONDOWN:
-        //DBOUT("WM_LBUTTONDOWN\n");
-        // Restrict the mouse cursor to the client area. This  
-        // ensures that the window receives a matching  
-        // WM_LBUTTONUP message.  
-
-        //ClipCursor(&rcClient);
-
-        // Save the coordinates of the mouse cursor.  
-
         pt.x = (LONG)LOWORD(lParam);
         pt.y = (LONG)HIWORD(lParam);
         fDrawRect = true;
         break;
     case WM_MOUSEMOVE:
         {
-        //DBOUT("MOUSEMOVE\n");
-            
-            // Draw a target rectangle or drag the bitmap rectangle,  
-            // depending on the status of the fDragRect flag.  
-
             if ((wParam && MK_LBUTTON) && fDrawRect)
             {
-                //DBOUT("WM_MOUSEMOVE\n");
-                // Set the mix mode so that the pen color is the  
-                // inverse of the background color. The previous  
-                // rectangle can then be erased by drawing  
-                // another rectangle on top of it.  
-
-                //SetROP2(hdc, R2_NOTXORPEN);
-
-                // If a previous target rectangle exists, erase  
-                // it by drawing another rectangle on top of it.  
                 if (!IsRectEmpty(&rcTarget))
                 {
                     InvalidateRect(hWnd, NULL, true);
                 }
-
-
-                // Save the coordinates of the target rectangle. Avoid  
-                // invalid rectangles by ensuring that the value of  
-                // the left coordinate is lesser than the  
-                // right coordinate, and that the value of the top 
-                // coordinate is lesser than the bottom coordinate. 
                 int left, top, right, bottom;
                 if ((pt.x < (LONG)LOWORD(lParam)) &&
                     (pt.y > (LONG) HIWORD(lParam)))
@@ -729,17 +690,9 @@ LRESULT CALLBACK DrawCanvasProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
                     right = LOWORD(lParam);
                     bottom = HIWORD(lParam);
                 }
-                SetRect(&rcTarget, left, top, right,
-                    bottom);
-                convertedX = (rcTarget.left * (selRect.right - selRect.left) / CANVAS_WIDTH);
-                convertedY = (rcTarget.top * (selRect.bottom - selRect.top) / CANVAS_HEIGHT);
-                convertedWidth = ((selRect.right - selRect.left) * (rcTarget.right - rcTarget.left)) / CANVAS_WIDTH;
-                convertedHeight = ((selRect.bottom - selRect.top) * (rcTarget.bottom - rcTarget.top)) / CANVAS_HEIGHT;
-                SendMessage(hwndUpDnCtlX, UDM_SETPOS, 0, convertedX);
-                SendMessage(hwndUpDnCtlY, UDM_SETPOS, 0, convertedY);
-                SendMessage(hwndUpDnCtlW, UDM_SETPOS, 0, convertedWidth);
-                SendMessage(hwndUpDnCtlH, UDM_SETPOS, 0, convertedHeight);
-
+                Resize(left, top, right, bottom);
+                CalculateDim();
+                mainDraw();
             }
         }
         break;
@@ -749,6 +702,7 @@ LRESULT CALLBACK DrawCanvasProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
     case WM_ERASEBKGND:
         return 1;
     case WM_DESTROY:
+        free(monitors.info);
         DeleteObject(hbrBkgnd);
         DeleteDC(hdcCompat);
         PostQuitMessage(0);
@@ -770,7 +724,7 @@ LRESULT CALLBACK  PrevCanvasProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
     case WM_DESTROY:
         PostQuitMessage(0);
         break;
-    case WM_ERASEBKGND: return TRUE;
+    case WM_ERASEBKGND: return 1;
     case WM_PAINT:
         //BeginPaint(hwnd, &ps);
 
@@ -781,7 +735,6 @@ LRESULT CALLBACK  PrevCanvasProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
     return DefWindowProc(hwnd, message, wParam, lParam);
 }
 
-// Message handler for about box.
 INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
     UNREFERENCED_PARAMETER(lParam);
@@ -803,15 +756,16 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 
 void PopulateProcessList() {
     SendMessageW(hwndProcessList, (UINT)CB_RESETCONTENT, 0, 0);
-    monitors.clear();
-    // Get the list of process identifiers.
+    int cMonitors = GetSystemMetrics(SM_CMONITORS);
+    monitors = {};
+    monitors.current = 0;
+    monitors.info = (MONITORINFOEXW*)calloc(cMonitors, sizeof(MONITORINFOEXW));
     unsigned int i;
     HDC mHDC = GetDC(NULL);
-    SendMessageW(hwndProcessList, (UINT)CB_ADDSTRING, (WPARAM)0, (LPARAM)L"Screen");
-    /*if (!EnumDisplayMonitors(mHDC, NULL, MonitorEnumProc, reinterpret_cast<LPARAM>(&monitors))) {
+    if (!EnumDisplayMonitors(NULL, NULL, MonitorEnumProc,(LPARAM)(&monitors))) {
         ReleaseDC(NULL, mHDC);
         return;
-    }*/
+    }
     if (!EnumWindows(enumWindowCallback, 0))
     {
         ReleaseDC(NULL, mHDC);
@@ -821,17 +775,15 @@ void PopulateProcessList() {
 }
 
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMon, HDC hdc, LPRECT lprcMonitor, LPARAM pData) {
-    SendMessageW(hwndProcessList, (UINT)CB_ADDSTRING, (WPARAM)0, (LPARAM)L"Screen");
-    MONITORINFOEX mi;
-    ZeroMemory(&mi, sizeof(mi));
-    mi.cbSize = sizeof(mi);
-    if (GetMonitorInfo(hMon, &mi))
-    {
-        HDC dc = CreateDC(NULL, mi.szDevice, NULL, NULL);
-        if (dc)
-            (*reinterpret_cast<device_hdc*>(pData)).push_back(std::make_pair(hdc, *lprcMonitor));
+    MonData* data = (MonData*)pData;
+    data->info[data->current].cbSize = sizeof(MONITORINFOEXW);
+    if (GetMonitorInfoW(hMon, &(data->info[data->current++]))) {
+        SendMessageW(hwndProcessList, (UINT)CB_ADDSTRING, (WPARAM)0, (LPARAM)data->info[data->current-1].szDevice);
+        return TRUE;
     }
-    return TRUE;
+    else {
+        return FALSE;
+    }
 }
 
 BOOL CALLBACK enumWindowCallback(HWND hwnd, LPARAM lparam) {
@@ -850,79 +802,54 @@ BOOL CALLBACK enumWindowCallback(HWND hwnd, LPARAM lparam) {
     return TRUE;
 }
 
-void CaptureAnImage(HWND hWnd, HWND hWndSource, bool isDrawing, bool isLoadRemoverRunning, bool isPrinting)
+void CaptureAnImage(HWND hWnd, HWND hWndSource, bool isDrawing)
 {
     HDC hdcScreen;
     HDC hdcWindow;
     HDC hdcMemDC = NULL;
     HBITMAP hbmScreen = NULL;
     BITMAP bmpScreen;
-    DWORD dwBytesWritten = 0;
-    DWORD dwSizeofDIB = 0;
-    char* lpbitmap = NULL;
-    HANDLE hDIB = NULL;
-    DWORD dwBmpSize = 0;
     int x, y, width, height;
-    HBITMAP newBitmap = NULL;
     int error = 0;
     BITMAPINFO   bi;
-    // Retrieve the handle to a display device context for the client 
-    // area of the window.
     if (hWndSource == NULL) {
-        hdcScreen = GetDC(NULL);
+        hdcScreen = CreateDC(selDisplay, selDisplay, NULL, NULL);
     }
     else {
         hdcScreen = GetDC(hWndSource);
     }
-    
     hdcWindow = GetDC(hWnd);
-
-    // Create a compatible DC, which is used in a BitBlt from the window DC.
     hdcMemDC = CreateCompatibleDC(hdcWindow);
-
-
     if (!hdcMemDC)
     {
         MessageBox(hWnd, L"CreateCompatibleDC has failed", L"Failed", MB_OK);
         goto done;
     }
-
-    if (!isLoadRemoverRunning && !isPrinting) {
-        // Get the client area for size calculation.
-        RECT rcClient, rcSource;
-        GetClientRect(hWnd, &rcClient);
-        if (hWndSource != NULL) {
-           GetClientRect(hWndSource, &rcSource);
-        }
-
-        // This is the best stretch mode.
-        SetStretchBltMode(hdcWindow, HALFTONE);
-
-        if (isDrawing || isLoadRemoverRunning) {
-            if (isDrawing && fDrawRect) {
-                convertedX = (rcTarget.left * (selRect.right - selRect.left) / CANVAS_WIDTH);
-                convertedY = (rcTarget.top * (selRect.bottom - selRect.top) / CANVAS_HEIGHT);
-                convertedWidth = ((selRect.right - selRect.left) * (rcTarget.right - rcTarget.left)) / CANVAS_WIDTH;
-                convertedHeight = ((selRect.bottom - selRect.top) * (rcTarget.bottom - rcTarget.top)) / CANVAS_HEIGHT;
-            }
-            x = convertedX;
-            y = convertedY;
-            width = convertedWidth;
-            height = convertedHeight;
+    RECT rcClient, rcSource;
+    GetClientRect(hWnd, &rcClient);
+    if (hWndSource != NULL) {
+        GetClientRect(hWndSource, &rcSource);
+    }
+    SetStretchBltMode(hdcWindow, HALFTONE);
+    if (isDrawing) {
+        x = convertedX;
+        y = convertedY;
+        width = convertedWidth;
+        height = convertedHeight;
+    }
+    else {
+        x = 0;
+        y = 0;
+        if (hWndSource == NULL) {
+            width = monitors.info[selDisplayIndex].rcMonitor.right - monitors.info[selDisplayIndex].rcMonitor.left;
+            height = monitors.info[selDisplayIndex].rcMonitor.bottom - monitors.info[selDisplayIndex].rcMonitor.top;
         }
         else {
-            x = 0;
-            y = 0;
-            if (hWndSource == NULL) {
-                width = GetSystemMetrics(SM_CXSCREEN);
-                height = GetSystemMetrics(SM_CYSCREEN);
-            }
-            else {
-                width = rcSource.right;
-                height = rcSource.bottom;
-            }
+            width = rcSource.right;
+            height = rcSource.bottom;
         }
-        // The source DC is the entire screen, and the destination DC is the current window (HWND).
+    }
+    if (!isDrawing || (isDrawing && showPreview)) {
         if (!StretchBlt(hdcWindow,
             0, 0,
             rcClient.right, rcClient.bottom,
@@ -937,122 +864,16 @@ void CaptureAnImage(HWND hWnd, HWND hWndSource, bool isDrawing, bool isLoadRemov
             MessageBox(NULL, (LPCWSTR)error, TEXT("Error..."), MB_OK | MB_ICONERROR);
             goto done;
         }
-        if (!isDrawing) {
-            HPEN pen = CreatePen(PS_SOLID, 2, RGB(0, 255, 0));
-            SelectObject(hdcWindow, GetStockObject(NULL_BRUSH));
-            SelectObject(hdcWindow, (HGDIOBJ)pen);
-            Rectangle(hdcWindow, rcTarget.left, rcTarget.top,
-                rcTarget.right, rcTarget.bottom);
-
-            //FrameRect(hdc, &rcTarget, CreateSolidBrush(RGB(0,0,255)));
-            DeleteObject(pen);
-            
-        }
-        error = 1;
-        
-    }
-    if ((isDrawing && !IsRectEmpty(&rcTarget))|| isPrinting) {
-        // Create a compatible bitmap from the Window DC.
-        hbmScreen = CreateCompatibleBitmap(hdcWindow, convertedWidth, convertedHeight);
-        if (!hbmScreen)
-        {
-            MessageBox(selHwnd, L"CreateCompatibleBitmap Failed", L"Failed", MB_OK);
-            error = 1;
-            goto done;
-        }
-        // Select the compatible bitmap into the compatible memory DC.
-        SelectObject(hdcMemDC, hbmScreen);
-
-        // Bit block transfer into our compatible memory DC.
-        if (!BitBlt(hdcMemDC,
-            0, 0,
-            convertedWidth, convertedHeight,
-            hdcWindow,
-            convertedX, convertedY,
-            SRCCOPY))
-        {
-            MessageBox(selHwnd, L"BitBlt has failed", L"Failed", MB_OK);
-            error = 1;
-            goto done;
-        }
-        // Get the BITMAP from the HBITMAP.
-        GetObject(hbmScreen, sizeof(BITMAP), &bmpScreen);
-        selBmp = bmpScreen;
-        //SendMessage(hwndPreviewCanvas, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)hbmScreen);
-        bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bi.bmiHeader.biWidth = bmpScreen.bmWidth;
-        bi.bmiHeader.biHeight = -bmpScreen.bmHeight;
-        bi.bmiHeader.biPlanes = 1;
-        bi.bmiHeader.biBitCount = BITS_PER_PIXEL;
-        bi.bmiHeader.biCompression = BI_RGB;
-        bi.bmiHeader.biSizeImage = 0;
-        bi.bmiHeader.biXPelsPerMeter = 0;
-        bi.bmiHeader.biYPelsPerMeter = 0;
-        bi.bmiHeader.biClrUsed = 0;
-        bi.bmiHeader.biClrImportant = 0;
-
-        dwBmpSize = ((bmpScreen.bmWidth * bi.bmiHeader.biBitCount + 31) / 32) * 4 * bmpScreen.bmHeight;
-        
-        //ClearBackground(hbmScreen);
-        HANDLE hDIB = NULL;
-        unsigned char* lpbitmap = NULL;
-        HANDLE hFile = NULL;
-        DWORD dwSizeofDIB = 0;
-        DWORD dwBytesWritten = 0;
-        // Starting with 32-bit Windows, GlobalAlloc and LocalAlloc are implemented as wrapper functions that 
-        // call HeapAlloc using a handle to the process's default heap. Therefore, GlobalAlloc and LocalAlloc 
-        // have greater overhead than HeapAlloc.
-        hDIB = GlobalAlloc(GHND, dwBmpSize);
-        lpbitmap = (unsigned char*)GlobalLock(hDIB);
-        BITMAPFILEHEADER   bmfHeader;
-
-        // Gets the "bits" from the bitmap, and copies them into a buffer 
-        // that's pointed to by lpbitmap.
-        cvMat.create(convertedHeight, convertedWidth, CV_8UC4);
-        GetDIBits(hdcWindow, hbmScreen, 0,
-            (UINT)bmpScreen.bmHeight,
-            cvMat.data,
-            (BITMAPINFO*)&bi, DIB_RGB_COLORS);
-        GetDIBits(hdcWindow, hbmScreen, 0,
-            (UINT)bmpScreen.bmHeight,
-            lpbitmap,
-            (BITMAPINFO*)&bi, DIB_RGB_COLORS);
-
-        // A file is created, this is where we will save the screen capture.
-        hFile = CreateFile(L"captureqwsx.bmp",
-            GENERIC_WRITE,
-            0,
-            NULL,
-            CREATE_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL, NULL);
-        // Add the size of the headers to the size of the bitmap to get the total file size.
-        dwSizeofDIB = dwBmpSize + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-
-        // Offset to where the actual bitmap bits start.
-        bmfHeader.bfOffBits = (DWORD)sizeof(BITMAPFILEHEADER) + (DWORD)sizeof(BITMAPINFOHEADER);
-
-        // Size of the file.
-        bmfHeader.bfSize = dwSizeofDIB;
-
-        // bfType must always be BM for Bitmaps.
-        bmfHeader.bfType = 0x4D42; // BM.
-        if (isPrinting) {
-            WriteFile(hFile, (LPSTR)&bmfHeader, sizeof(BITMAPFILEHEADER), &dwBytesWritten, NULL);
-            WriteFile(hFile, (LPSTR)&bi, sizeof(BITMAPINFOHEADER), &dwBytesWritten, NULL);
-            WriteFile(hFile, (LPSTR)lpbitmap, dwBmpSize, &dwBytesWritten, NULL);
-            cv::imwrite("test.png", cvMat);
-        }
-        
-
-        // Unlock and Free the DIB from the heap.
-        GlobalUnlock(hDIB);
-        GlobalFree(hDIB);
-
-        // Close the handle for the file that was created.
-        CloseHandle(hFile);
     }
     
-
+    if (!isDrawing) {
+        if (!refMat.empty() && convertedWidth > 0 && convertedHeight > 0){
+            cv::resize(refMat, resized, cv::Size(convertedWidth, convertedHeight), cv::INTER_LINEAR);
+            cv::cvtColor(resized, grayResized, cv::COLOR_BGRA2GRAY);
+            //DBOUT("gresized Mat " << GetMatType(grayResized) << " " << GetMatDepth(grayResized) << std::endl);
+        }
+        FrameRect(hdcWindow, &rcTarget, CreateSolidBrush(RGB(0,255,0)));
+    }
 done:
     DeleteObject(hbmScreen);
     DeleteObject(hdcMemDC);
@@ -1069,12 +890,19 @@ DWORD WINAPI LoadRemover(LPVOID lpParam)
 {
     float ret;
     while (isThreadWorking) {
-        ret = GetPSNR(selHwnd);
-        if (ret > 17 && !server.get_isLoading()) {
+        CaptureAnImage(hwndPreviewCanvas, selHwnd, true);
+        if (!IsRectEmpty(&rcTarget) && convertedWidth > 0 && convertedHeight > 0) {
+            GrabMat(selHwnd);
+            ret = GetPSNR(selHwnd);
+        }
+        else {
+            ret = -1.0;
+        }
+        if (ret >= threshold && !server.get_isLoading()) {
             server.send_to_ls("pausegametime\r\n");
             server.set_isLoading(true);
         }
-        else if (ret <= 17 && server.get_isLoading()) {
+        else if (ret < threshold && server.get_isLoading()) {
             server.send_to_ls("unpausegametime\r\n");
             server.set_isLoading(false);
         }
@@ -1082,86 +910,12 @@ DWORD WINAPI LoadRemover(LPVOID lpParam)
     return 0;
 }
 
-void RGBtoHSL(BYTE r, BYTE g, BYTE b, byte (&hsl)[3]) {
-    float fR = r / 255.0;
-    float fG = g / 255.0;
-    float fB = b / 255.0;
-
-
-    float fCMin = std::min({fR, fG, fB});
-    float fCMax = std::max({ fR, fG, fB });
-
-
-    hsl[2] = 50 * (fCMin + fCMax);
-
-    if (fCMin == fCMax)
-    {
-        hsl[1] = 0;
-        hsl[0] = 0;
-        return;
-
-    }
-    else if (hsl[2] < 50)
-    {
-        hsl[1] = 100 * (fCMax - fCMin) / (fCMax + fCMin);
-    }
-    else
-    {
-        hsl[1] = 100 * (fCMax - fCMin) / (2.0 - fCMax - fCMin);
-    }
-
-    if (fCMax == fR)
-    {
-        hsl[0] = 60 * (fG - fB) / (fCMax - fCMin);
-    }
-    if (fCMax == fG)
-    {
-        hsl[0] = 60 * (fB - fR) / (fCMax - fCMin) + 120;
-    }
-    if (fCMax == fB)
-    {
-        hsl[0] = 60 * (fR - fG) / (fCMax - fCMin) + 240;
-    }
-    if (hsl[0] < 0)
-    {
-        hsl[0] = hsl[0] + 360;
-    }
-}
-
-int hue2rgb(int p, int q, int t) {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-}
-
-int* HSLtoRGB(int h, int s, int l) {
-    int r, g, b;
-    int rgb[3];
-    if (s == 0) {
-        r = g = b = l; // achromatic
-    }
-    else {
-        int q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-        int p = 2 * l - q;
-        r = hue2rgb(p, q, h + 1 / 3);
-        g = hue2rgb(p, q, h);
-        b = hue2rgb(p, q, h - 1 / 3);
-    }
-    rgb[0] = std::round(r * 255);
-    rgb[1] = std::round(g * 255);
-    rgb[2] = std::round(b * 255);
-    return rgb;
-}
-
 void AddMenus(HWND hWnd) {
     hMenu = CreateMenu();
     HMENU hFileMenu = CreateMenu();
     HMENU hAboutMenu = CreateMenu();
-    AppendMenu(hFileMenu, MF_STRING, ID_FILE_OPEN, L"Open");
     AppendMenu(hFileMenu, MF_STRING, ID_IMAGE_LOAD, L"Load Image");
+    AppendMenu(hFileMenu, MF_STRING, ID_FILE_OPEN, L"Open");
     AppendMenu(hFileMenu, MF_STRING, ID_FILE_SAVE, L"Save");
     AppendMenu(hFileMenu, MF_STRING, ID_FILE_SAVE_AS, L"Save As");
     AppendMenu(hFileMenu, MF_STRING, IDM_EXIT, L"Exit");
@@ -1171,46 +925,85 @@ void AddMenus(HWND hWnd) {
     SetMenu(hWnd, hMenu);
     cyVScroll = GetSystemMetrics(SM_CYVSCROLL);   
     hwndUpDnEdtBdyX = CreateUpDnBuddy(hWnd, 0, 175);  // Create an buddy window (an Edit control).
-    hwndUpDnCtlX = CreateUpDnCtl(hWnd);    // Create an Up-Down control.
+    hwndUpDnCtlX = CreateUpDnCtl(hWnd, 0, 175, L"X");    // Create an Up-Down control.
     hwndUpDnEdtBdyY = CreateUpDnBuddy(hWnd, 105, 175);  // Create an buddy window (an Edit control).
-    hwndUpDnCtlY = CreateUpDnCtl(hWnd);    // Create an Up-Down control.
+    hwndUpDnCtlY = CreateUpDnCtl(hWnd, 105, 175, L"Y");    // Create an Up-Down control.
     hwndUpDnEdtBdyW = CreateUpDnBuddy(hWnd, 210, 175);  // Create an buddy window (an Edit control).
-    hwndUpDnCtlW = CreateUpDnCtl(hWnd);    // Create an Up-Down control.
+    hwndUpDnCtlW = CreateUpDnCtl(hWnd, 210, 175, L"Width");    // Create an Up-Down control.
     hwndUpDnEdtBdyH = CreateUpDnBuddy(hWnd, 315, 175);  // Create an buddy window (an Edit control).
-    hwndUpDnCtlH = CreateUpDnCtl(hWnd);    // Create an Up-Down control.
+    hwndUpDnCtlH = CreateUpDnCtl(hWnd, 315, 175, L"Height");    // Create an Up-Down control.
 }
 
-void OpenFile() {
+void LoadFile(HWND hwnd, bool isRefImg) {
     hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED |
         COINIT_DISABLE_OLE1DDE);
     if (SUCCEEDED(hr))
     {
         IFileOpenDialog* pFileOpen;
-
-        // Create the FileOpenDialog object.
         hr = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL,
             IID_IFileOpenDialog, reinterpret_cast<void**>(&pFileOpen));
-
         if (SUCCEEDED(hr))
         {
-            // Show the Open dialog box.
+            if (isRefImg) {
+                COMDLG_FILTERSPEC rgSpec[] =
+                {
+                    {L"All supported images.", L"*.jpg;*.jpeg;*.png;*.bmp;*.gif"},
+                };
+                pFileOpen->SetFileTypes(ARRAYSIZE(rgSpec), rgSpec);
+            }
+            else {
+                COMDLG_FILTERSPEC rgSpec[] =
+                {
+                    {L".dat", L"*.dat"},
+                };
+                pFileOpen->SetFileTypes(ARRAYSIZE(rgSpec), rgSpec);
+            }
             hr = pFileOpen->Show(NULL);
-
-            // Get the file name from the dialog box.
             if (SUCCEEDED(hr))
             {
                 IShellItem* pItem;
                 hr = pFileOpen->GetResult(&pItem);
                 if (SUCCEEDED(hr))
                 {
-                    PWSTR pszFilePath;
-                    hr = pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath);
-
-                    // Display the file name to the user.
-                    if (SUCCEEDED(hr))
-                    {
-                        MessageBoxW(NULL, pszFilePath, L"File Path", MB_OK);
-                        CoTaskMemFree(pszFilePath);
+                    if (isRefImg) {
+                        hr = pItem->GetDisplayName(SIGDN_FILESYSPATH, &filePath);
+                        if (SUCCEEDED(hr))
+                        {
+                            RenderRefImage(hwnd);
+                        }
+                    } else {
+                        hr = pItem->GetDisplayName(SIGDN_FILESYSPATH, &saveFilePath);
+                        if (SUCCEEDED(hr))
+                        {
+                            std::wstring wFilePath;
+                            std::wifstream ss(saveFilePath, std::ifstream::in);
+                            ss >> threshold;
+                            ss >> rcTarget.left;
+                            ss >> rcTarget.top;
+                            ss >> rcTarget.right;
+                            ss >> rcTarget.bottom;
+                            ss >> wFilePath;
+                            ss >> convertedX;
+                            ss >> convertedY;
+                            ss >> convertedWidth;
+                            ss >> convertedHeight;
+                            filePath = (PWSTR) wFilePath.c_str();
+                            ss.close();
+                            Resize(rcTarget.left, rcTarget.top, rcTarget.right, rcTarget.bottom);
+                            RenderRefImage(hwnd);
+                            WCHAR buf[40];
+                            swprintf(buf, sizeof(buf), L"%f", threshold);
+                            SetWindowText(hwndThreshold, std::to_wstring(threshold).c_str());
+                            SetWindowText(savedX, std::to_wstring(convertedX).c_str());
+                            SetWindowText(savedY, std::to_wstring(convertedY).c_str());
+                            SetWindowText(savedW, std::to_wstring(convertedWidth).c_str());
+                            SetWindowText(savedH, std::to_wstring(convertedHeight).c_str());
+                            intSavedX = convertedX;
+                            intSavedY = convertedY;
+                            intSavedW = convertedWidth;
+                            intSavedH = convertedHeight;
+                            mainDraw();
+                        }
                     }
                     pItem->Release();
                 }
@@ -1221,72 +1014,94 @@ void OpenFile() {
     }
 }
 
-void LoadRefImage() {
+void SaveFileAs(HWND hwnd) {
+    TCHAR buff[MAX_LOADSTRING];
+    GetWindowText(hwndThreshold, buff, MAX_LOADSTRING);
+    threshold = _tstof(buff);
+    if (IsRectEmpty(&rcTarget) || threshold == NULL || threshold == 0.0 || refMat.empty()) {
+        MessageBox(hwnd, L"Need green box, threshold value, and a reference image.", TEXT("Error..."), MB_OK | MB_ICONERROR);
+        return;
+    }
     hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED |
         COINIT_DISABLE_OLE1DDE);
-    if (SUCCEEDED(hr))
-    {
-        IFileOpenDialog* pFileOpen;
-
-        // Create the FileOpenDialog object.
-        hr = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL,
-            IID_IFileOpenDialog, reinterpret_cast<void**>(&pFileOpen));
-
-        if (SUCCEEDED(hr))
-        {
-            // Show the Open dialog box.
-            hr = pFileOpen->Show(NULL);
-
-            // Get the file name from the dialog box.
-            if (SUCCEEDED(hr))
+    if (SUCCEEDED(hr)) {
+        IFileSaveDialog* pFileSaveAs;
+        hr = CoCreateInstance(CLSID_FileSaveDialog, NULL, CLSCTX_ALL,
+            IID_IFileSaveDialog, reinterpret_cast<void**>(&pFileSaveAs));
+        if (SUCCEEDED(hr)) {
+            COMDLG_FILTERSPEC rgSpec[] =
             {
+                {L".dat", L"*.dat;"},
+            };
+            hr = pFileSaveAs->SetFileTypes(ARRAYSIZE(rgSpec), rgSpec);
+            hr = pFileSaveAs->Show(NULL);
+            if (SUCCEEDED(hr)) {
                 IShellItem* pItem;
-                hr = pFileOpen->GetResult(&pItem);
-                if (SUCCEEDED(hr))
-                {
-                    PWSTR pszFilePath;
-                    hr = pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath);
-
-                    // Display the file name to the user.
-                    if (SUCCEEDED(hr))
-                    {
-                        Gdiplus::Bitmap::FromFile(pszFilePath);
-                        std::wstringstream ss;
-                        ss << pszFilePath;
-                        std::string str;
-                        std::wstring_convert<std::codecvt_utf8<wchar_t>> ccvt;
-                        str = ccvt.to_bytes(ss.str());
-                        hp3 = cv::imread(str);
-                        //refBmp = (HBITMAP) LoadImageW(NULL, str, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
-                        //SendMessage(hwndImage, STM_SETIMAGE, 0, (LPARAM)refBmp);
-                        MessageBoxW(NULL, pszFilePath, L"File Path", MB_OK);
-                        CoTaskMemFree(pszFilePath);
+                hr = pFileSaveAs->GetResult(&pItem);
+                if (SUCCEEDED(hr)) {
+                    hr = pItem->GetDisplayName(SIGDN_FILESYSPATH, &saveFilePath);
+                    if (SUCCEEDED(hr)) {
+                        std::wofstream outData(saveFilePath);
+                        if (outData.is_open()) {
+                            TCHAR buff[MAX_LOADSTRING];
+                            GetWindowText(hwndThreshold, buff, MAX_LOADSTRING);
+                            threshold = _tstof(buff);
+                            outData << threshold << std::endl;
+                            outData << rcTarget.left << std::endl;
+                            outData << rcTarget.top << std::endl;
+                            outData << rcTarget.right << std::endl;
+                            outData << rcTarget.bottom << std::endl;
+                            outData << filePath << std::endl;
+                            outData << convertedX << std::endl;
+                            outData << convertedY << std::endl;
+                            outData << convertedWidth << std::endl;
+                            outData << convertedHeight << std::endl;
+                            outData.close();
+                        }
+                        SetWindowText(hwndThreshold, std::to_wstring(threshold).c_str());
+                        SetWindowText(savedX, std::to_wstring(convertedX).c_str());
+                        SetWindowText(savedY, std::to_wstring(convertedY).c_str());
+                        SetWindowText(savedW, std::to_wstring(convertedWidth).c_str());
+                        SetWindowText(savedH, std::to_wstring(convertedHeight).c_str());
                     }
                     pItem->Release();
                 }
             }
-            pFileOpen->Release();
+            pFileSaveAs->Release();
         }
         CoUninitialize();
     }
-}
-
-void SaveFileAs() {
-
 }
 
 void SaveFile() {
-
+    if (saveFilePath != NULL) {
+        std::wofstream outData(saveFilePath);
+        if (outData.is_open()) {
+            TCHAR buff[MAX_LOADSTRING];
+            GetWindowText(hwndThreshold, buff, MAX_LOADSTRING);
+            threshold = _tstof(buff);
+            outData << threshold << std::endl;
+            outData << rcTarget.left << std::endl;
+            outData << rcTarget.top << std::endl;
+            outData << rcTarget.right << std::endl;
+            outData << rcTarget.bottom << std::endl;
+            outData << filePath << std::endl;
+            outData << convertedX << std::endl;
+            outData << convertedY << std::endl;
+            outData << convertedWidth << std::endl;
+            outData << convertedHeight << std::endl;
+            outData.close();
+        }
+        SetWindowText(hwndThreshold, std::to_wstring(threshold).c_str());
+        SetWindowText(savedX, std::to_wstring(convertedX).c_str());
+        SetWindowText(savedY, std::to_wstring(convertedY).c_str());
+        SetWindowText(savedW, std::to_wstring(convertedWidth).c_str());
+        SetWindowText(savedH, std::to_wstring(convertedHeight).c_str());
+    }
 }
-
 
 HWND CreateUpDnBuddy(HWND hwndParent, int x, int y)
 {
-    icex.dwICC = ICC_STANDARD_CLASSES;    // Set the Initialization Flag value.
-    //InitCommonControlsEx(&icex);          // Initialize the Common Controls Library to use 
-                                          // Buttons, Edit Controls, Static Controls, Listboxes, 
-                                          // Comboboxes, and  Scroll Bars.
-
     hControl = CreateWindowEx(WS_EX_LEFT | WS_EX_CLIENTEDGE | WS_EX_CONTEXTHELP,    //Extended window styles.
         WC_EDIT,
         NULL,
@@ -1298,15 +1113,11 @@ HWND CreateUpDnBuddy(HWND hwndParent, int x, int y)
         NULL,
         hInst,
         NULL);
-
     return (hControl);
 }
 
-HWND CreateUpDnCtl(HWND hwndParent)
+HWND CreateUpDnCtl(HWND hwndParent, int x, int y, const wchar_t* label)
 {
-    icex.dwICC = ICC_UPDOWN_CLASS;    // Set the Initialization Flag value.
-    //InitCommonControlsEx(&icex);      // Initialize the Common Controls Library.
-
     hControl = CreateWindowEx(WS_EX_LEFT | WS_EX_LTRREADING,
         UPDOWN_CLASS,
         NULL,
@@ -1318,30 +1129,85 @@ HWND CreateUpDnCtl(HWND hwndParent)
         NULL,
         hInst,
         NULL);
-
     SendMessage(hControl, UDM_SETRANGE, 0, MAKELPARAM(valMax, valMin));    // Sets the controls direction 
-                                                                           // and range.
-
+    CreateWindow(L"Static",
+        label,
+        WS_VISIBLE | WS_CHILD,
+        x, y - 25,
+        100, 20,
+        hwndParent,
+        NULL,
+        hInst,
+        NULL);
     return (hControl);
 }
 
 float GetPSNR(HWND hwnd) {
-    //cv::imwrite("test.png", cvMat);
     float PSNR = 0.0;
-    // get handles to a device context (DC)
-    HDC hwindowDC = GetDC(hwnd);
-    HDC hwindowCompatibleDC = CreateCompatibleDC(hwindowDC);
-    SetStretchBltMode(hwindowCompatibleDC, COLORONCOLOR);
+    BufferPSNR b;
+    BufferMSSIM b2;
+    if (!refMat.empty() && convertedWidth > 0 && convertedHeight > 0) {
+        cv::Mat srcGray;
+        try {
+            cv::cvtColor(cvMat, srcGray, cv::COLOR_BGRA2GRAY);
+            //DBOUT("gresized Mat " << GetMatType(grayResized) << " " << GetMatDepth(grayResized) << std::endl);
+            //DBOUT("srcGray Mat " << GetMatType(srcGray) << " " << GetMatDepth(srcGray) << std::endl);
+            if (hasCuda) {
+                //PSNR = getMSSIM_CUDA_optimized(srcGray, resized, b2);
+                PSNR = getPSNR_CUDA_optimized(srcGray, grayResized, b);
+            }
+            else {
+                PSNR = cv::PSNR(srcGray, grayResized);
+            }
+            int dec, sign;
+            std::wostringstream ss;
+            ss << PSNR;
+            SetWindowText(hwndPSNR, (LPCWSTR)ss.str().c_str());
+            RedrawWindow(hwndPSNR, NULL, NULL, RDW_ERASE);
+        }
+        catch (std::exception& e) {
+            DBOUT(e.what() << "\n");
+        }
+    }
+    return PSNR;
+}
 
-    // create mat object
-    cvMat.create(convertedHeight, convertedWidth, CV_8UC4);
+void Resize(int left, int top, int right, int bottom) {
+    SetRect(&rcTarget, left, top, right, bottom);
+    
+}
 
-    // create a bitmap
-    HBITMAP hbwindow = CreateCompatibleBitmap(hwindowDC, convertedWidth, convertedHeight);
+void mainDraw() {
+    if (!isInitialLoad) {
+        CaptureAnImage(hwndDrawableCanvas, selHwnd, false);
+        CaptureAnImage(hwndPreviewCanvas, selHwnd, true);
+        if (!IsRectEmpty(&rcTarget) && convertedWidth > 0 && convertedHeight > 0) {
+            GrabMat(selHwnd);
+            GetPSNR(selHwnd);
+            if (hasCuda) {
+                //DisplayDiff();
+            }
+        }
+    }
+}
+
+void GrabMat(HWND hwnd) {
+    HDC hwindowDC, hwindowCompatibleDC;
+    HBITMAP hbwindow;
     BITMAPINFOHEADER  bi;
-
-    // create a bitmap
-    bi.biSize = sizeof(BITMAPINFOHEADER);
+    if (hwnd == NULL) {
+        hwindowDC = CreateDC(selDisplay, selDisplay, NULL, NULL);
+    }
+    else {
+        hwindowDC = GetDC(hwnd);
+    }
+    hwindowCompatibleDC = CreateCompatibleDC(hwindowDC);
+    SetStretchBltMode(hwindowCompatibleDC, HALFTONE);
+    RECT windowsize;    // get the height and width of the screen
+    GetClientRect(hwnd, &windowsize);
+    cvMat.create(convertedHeight, convertedWidth, CV_8UC4);
+    hbwindow = CreateCompatibleBitmap(hwindowDC, convertedWidth, convertedHeight);
+    bi.biSize = sizeof(BITMAPINFOHEADER);    //http://msdn.microsoft.com/en-us/library/windows/window/dd183402%28v=vs.85%29.aspx
     bi.biWidth = convertedWidth;
     bi.biHeight = -convertedHeight;  //this is the line that makes it draw upside down or not
     bi.biPlanes = 1;
@@ -1352,33 +1218,200 @@ float GetPSNR(HWND hwnd) {
     bi.biYPelsPerMeter = 0;
     bi.biClrUsed = 0;
     bi.biClrImportant = 0;
-
-    // use the previously created device context with the bitmap
     SelectObject(hwindowCompatibleDC, hbwindow);
+    BitBlt(hwindowCompatibleDC, 0, 0, convertedWidth, convertedHeight, hwindowDC, convertedX, convertedY, SRCCOPY); //change SRCCOPY to NOTSRCCOPY for wacky colors !
+    GetDIBits(hwindowCompatibleDC, hbwindow, 0, convertedHeight, cvMat.data, (BITMAPINFO*)&bi, DIB_RGB_COLORS);  //copy from hwindowCompatibleDC to hbwindow
+    DeleteObject(hbwindow); DeleteDC(hwindowCompatibleDC); ReleaseDC(hwnd, hwindowDC);
+}
 
-    // copy from the window device context to the bitmap device context
-    StretchBlt(hwindowCompatibleDC, 0, 0, convertedWidth, convertedHeight, hwindowDC, convertedX, convertedY, convertedWidth, convertedHeight, SRCCOPY);  //change SRCCOPY to NOTSRCCOPY for wacky colors !
-    GetDIBits(hwindowCompatibleDC, hbwindow, 0, convertedHeight, cvMat.data, (BITMAPINFO*)&bi, DIB_RGB_COLORS);            //copy from hwindowCompatibleDC to hbwindow
+void RenderRefImage(HWND hwnd) {
+    InvalidateRect(hwnd, NULL, true);
+    refBmp = new Gdiplus::Bitmap(filePath);
+    std::wstringstream ss;
+    ss << filePath;
+    std::string str;
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> ccvt;
+    str = ccvt.to_bytes(ss.str());
+    refMat = cv::imread(str);
+}
 
-    // avoid memory leak
-    DeleteObject(hbwindow);
-    DeleteDC(hwindowCompatibleDC);
-    ReleaseDC(hwnd, hwindowDC);
+void CalculateDim() {
+    convertedX = (rcTarget.left * (selRect.right - selRect.left) / CANVAS_WIDTH);
+    convertedY = (rcTarget.top * (selRect.bottom - selRect.top) / CANVAS_HEIGHT);
+    convertedWidth = ((selRect.right - selRect.left) * (rcTarget.right - rcTarget.left)) / CANVAS_WIDTH;
+    convertedHeight = ((selRect.bottom - selRect.top) * (rcTarget.bottom - rcTarget.top)) / CANVAS_HEIGHT;
+    SendMessage(hwndUpDnCtlX, UDM_SETPOS, 0, convertedX);
+    SendMessage(hwndUpDnCtlY, UDM_SETPOS, 0, convertedY);
+    SendMessage(hwndUpDnCtlW, UDM_SETPOS, 0, convertedWidth);
+    SendMessage(hwndUpDnCtlH, UDM_SETPOS, 0, convertedHeight);
+}
 
-    cv::Mat resized, grayResized, srcGray;
-    cv::resize(hp3, resized, cv::Size(convertedWidth, convertedHeight), cv::INTER_LINEAR);
-    cv::cvtColor(resized, grayResized, cv::COLOR_BGR2GRAY);
-    cv::cvtColor(cvMat, srcGray, cv::COLOR_BGR2GRAY);
-    try {
-        PSNR = cv::PSNR(grayResized, srcGray);
-        int dec, sign;
-        std::wostringstream ss;
-        ss << PSNR;
-        SetWindowText(hwndPSNR, (LPCWSTR)ss.str().c_str());
-        RedrawWindow(hwndPSNR, NULL, NULL, RDW_ERASE);
+double getPSNR_CUDA_optimized(const cv::Mat& I1, const cv::Mat& I2, BufferPSNR& b)
+{
+    b.gI1.upload(I1);
+    b.gI2.upload(I2);
+    b.gI1.convertTo(b.t1, CV_32F);
+    b.gI2.convertTo(b.t2, CV_32F);
+    cv::cuda::absdiff(b.t1.reshape(1), b.t2.reshape(1), b.gs);
+    cv::cuda::multiply(b.gs, b.gs, b.gs);
+    double sse = cv::cuda::sum(b.gs, b.buf)[0];
+    cv::cuda::absdiff(b.gI1, b.gI2, b.gI2);
+    diff.create(convertedHeight, convertedWidth, CV_8UC1);
+    b.gI2.download(diff);
+    if (sse <= 1e-10) // for small values return zero
+        return 0;
+    else
+    {
+        double mse = sse / (double)(I1.channels() * I1.total());
+        double psnr = 10.0 * log10((255 * 255) / mse);
+        return psnr;
     }
-    catch (std::exception& e) {
-        DBOUT(e.what() << "\n");
+}
+
+void DisplayDiff() {
+    BITMAPINFO  bi;
+    ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);    //http://msdn.microsoft.com/en-us/library/windows/window/dd183402%28v=vs.85%29.aspx
+    bi.bmiHeader.biWidth = diff.cols;
+    bi.bmiHeader.biHeight = -diff.rows;  //this is the line that makes it draw upside down or not
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    bi.bmiHeader.biSizeImage = 0;
+    bi.bmiHeader.biXPelsPerMeter = 0;
+    bi.bmiHeader.biYPelsPerMeter = 0;
+    bi.bmiHeader.biClrUsed = 0;
+    bi.bmiHeader.biClrImportant = 0;
+    HDC hdc = GetDC(hwndPreviewCanvas);
+    UINT cColors = GetDIBColorTable(hdc, 0, 256, bi.bmiColors);
+    for (UINT iColor = 0; iColor < cColors; iColor++) {
+        BYTE b = (BYTE)((30 * bi.bmiColors[iColor].rgbRed +
+            59 * bi.bmiColors[iColor].rgbGreen +
+            11 * bi.bmiColors[iColor].rgbBlue) / 100);
+        bi.bmiColors[iColor].rgbRed = b;
+        bi.bmiColors[iColor].rgbGreen = b;
+        bi.bmiColors[iColor].rgbBlue = b;
     }
-    return PSNR;
+    StretchDIBits(hdc, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT, 0, 0, diff.cols, diff.rows, diff.data, &bi, DIB_RGB_COLORS, SRCCOPY);
+    ReleaseDC(hwndPreviewCanvas, hdc);
+}
+
+float getMSSIM_CUDA_optimized(const cv::Mat& i1, const cv::Mat& i2, BufferMSSIM& b)
+{
+    const float C1 = 6.5025f, C2 = 58.5225f;
+    /***************************** INITS **********************************/
+    b.gI1.upload(i1);
+    b.gI2.upload(i2);
+    cv::cuda::Stream stream;
+    b.gI1.convertTo(b.t1, CV_32F, stream);
+    b.gI2.convertTo(b.t2, CV_32F, stream);
+    cv::cuda::split(b.t1, b.vI1, stream);
+    cv::cuda::split(b.t2, b.vI2, stream);
+    cv::Scalar mssim;
+    cv::Ptr<cv::cuda::Filter> gauss = cv::cuda::createGaussianFilter(b.vI1[0].type(), -1, cv::Size(11, 11), 1.5);
+    float ssim = 0.0;
+    for (int i = 0; i < b.gI1.channels(); ++i)
+    {
+        cv::cuda::multiply(b.vI2[i], b.vI2[i], b.I2_2, 1, -1, stream);        // I2^2
+        cv::cuda::multiply(b.vI1[i], b.vI1[i], b.I1_2, 1, -1, stream);        // I1^2
+        cv::cuda::multiply(b.vI1[i], b.vI2[i], b.I1_I2, 1, -1, stream);       // I1 * I2
+        gauss->apply(b.vI1[i], b.mu1, stream);
+        gauss->apply(b.vI2[i], b.mu2, stream);
+        cv::cuda::multiply(b.mu1, b.mu1, b.mu1_2, 1, -1, stream);
+        cv::cuda::multiply(b.mu2, b.mu2, b.mu2_2, 1, -1, stream);
+        cv::cuda::multiply(b.mu1, b.mu2, b.mu1_mu2, 1, -1, stream);
+        gauss->apply(b.I1_2, b.sigma1_2, stream);
+        cv::cuda::subtract(b.sigma1_2, b.mu1_2, b.sigma1_2, cv::cuda::GpuMat(), -1, stream);
+        //b.sigma1_2 -= b.mu1_2;  - This would result in an extra data transfer operation
+        gauss->apply(b.I2_2, b.sigma2_2, stream);
+        cv::cuda::subtract(b.sigma2_2, b.mu2_2, b.sigma2_2, cv::cuda::GpuMat(), -1, stream);
+        //b.sigma2_2 -= b.mu2_2;
+        gauss->apply(b.I1_I2, b.sigma12, stream);
+        cv::cuda::subtract(b.sigma12, b.mu1_mu2, b.sigma12, cv::cuda::GpuMat(), -1, stream);
+        //b.sigma12 -= b.mu1_mu2;
+        //here too it would be an extra data transfer due to call of operator*(Scalar, Mat)
+        cv::cuda::multiply(b.mu1_mu2, 2, b.t1, 1, -1, stream); //b.t1 = 2 * b.mu1_mu2 + C1;
+        cv::cuda::add(b.t1, C1, b.t1, cv::cuda::GpuMat(), -1, stream);
+        cv::cuda::multiply(b.sigma12, 2, b.t2, 1, -1, stream); //b.t2 = 2 * b.sigma12 + C2;
+        cv::cuda::add(b.t2, C2, b.t2, cv::cuda::GpuMat(), -12, stream);
+        cv::cuda::multiply(b.t1, b.t2, b.t3, 1, -1, stream);     // t3 = ((2*mu1_mu2 + C1).*(2*sigma12 + C2))
+        cv::cuda::add(b.mu1_2, b.mu2_2, b.t1, cv::cuda::GpuMat(), -1, stream);
+        cv::cuda::add(b.t1, C1, b.t1, cv::cuda::GpuMat(), -1, stream);
+        cv::cuda::add(b.sigma1_2, b.sigma2_2, b.t2, cv::cuda::GpuMat(), -1, stream);
+        cv::cuda::add(b.t2, C2, b.t2, cv::cuda::GpuMat(), -1, stream);
+        cv::cuda::multiply(b.t1, b.t2, b.t1, 1, -1, stream);     // t1 =((mu1_2 + mu2_2 + C1).*(sigma1_2 + sigma2_2 + C2))
+        cv::cuda::divide(b.t3, b.t1, b.ssim_map, 1, -1, stream);      // ssim_map =  t3./t1;
+        stream.waitForCompletion();
+        cv::Scalar s = cv::cuda::sum(b.ssim_map, b.buf);
+        mssim.val[i] = s.val[0] / (b.ssim_map.rows * b.ssim_map.cols);
+        ssim += mssim.val[i];
+    }
+    cv::cuda::absdiff(b.gI1, b.gI2, b.gI1);
+    diff.create(convertedHeight, convertedWidth, CV_8UC4);
+    b.gI1.download(diff);
+    return (ssim / b.gI1.channels());
+}
+
+std::wstring GetMatDepth(const cv::Mat& mat)
+{
+    const int depth = mat.depth();
+
+    switch (depth)
+    {
+    case CV_8U:  return L"CV_8U";
+    case CV_8S:  return L"CV_8S";
+    case CV_16U: return L"CV_16U";
+    case CV_16S: return L"CV_16S";
+    case CV_32S: return L"CV_32S";
+    case CV_32F: return L"CV_32F";
+    case CV_64F: return L"CV_64F";
+    default:
+        return L"Invalid depth type of matrix!";
+    }
+}
+
+std::wstring GetMatType(const cv::Mat& mat)
+{
+    const int mtype = mat.type();
+
+    switch (mtype)
+    {
+    case CV_8UC1:  return L"CV_8UC1";
+    case CV_8UC2:  return L"CV_8UC2";
+    case CV_8UC3:  return L"CV_8UC3";
+    case CV_8UC4:  return L"CV_8UC4";
+
+    case CV_8SC1:  return L"CV_8SC1";
+    case CV_8SC2:  return L"CV_8SC2";
+    case CV_8SC3:  return L"CV_8SC3";
+    case CV_8SC4:  return L"CV_8SC4";
+
+    case CV_16UC1: return L"CV_16UC1";
+    case CV_16UC2: return L"CV_16UC2";
+    case CV_16UC3: return L"CV_16UC3";
+    case CV_16UC4: return L"CV_16UC4";
+
+    case CV_16SC1: return L"CV_16SC1";
+    case CV_16SC2: return L"CV_16SC2";
+    case CV_16SC3: return L"CV_16SC3";
+    case CV_16SC4: return L"CV_16SC4";
+
+    case CV_32SC1: return L"CV_32SC1";
+    case CV_32SC2: return L"CV_32SC2";
+    case CV_32SC3: return L"CV_32SC3";
+    case CV_32SC4: return L"CV_32SC4";
+
+    case CV_32FC1: return L"CV_32FC1";
+    case CV_32FC2: return L"CV_32FC2";
+    case CV_32FC3: return L"CV_32FC3";
+    case CV_32FC4: return L"CV_32FC4";
+
+    case CV_64FC1: return L"CV_64FC1";
+    case CV_64FC2: return L"CV_64FC2";
+    case CV_64FC3: return L"CV_64FC3";
+    case CV_64FC4: return L"CV_64FC4";
+
+    default:
+        return L"Invalid type of matrix!";
+    }
 }

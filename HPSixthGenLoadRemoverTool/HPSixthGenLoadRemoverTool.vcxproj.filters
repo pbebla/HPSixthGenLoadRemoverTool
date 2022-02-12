@@ -60,8 +60,5 @@
     <Image Include="HPSixthGenLoadRemoverTool.ico">
       <Filter>Resource Files</Filter>
     </Image>
-    <Image Include="..\..\..\..\hp1sixthgen\imgs\wizardcard.png">
-      <Filter>Resource Files</Filter>
-    </Image>
   </ItemGroup>
 </Project>

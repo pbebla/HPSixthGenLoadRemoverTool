@@ -11,6 +11,11 @@
 #include <exception>
 #include <thread>
 #include <string>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/core/cuda.hpp>
+#include <opencv2/cudaarithm.hpp>
+#include <iostream>
+#include <fstream>
 
 #pragma comment(lib, "Ws2_32.lib")
 

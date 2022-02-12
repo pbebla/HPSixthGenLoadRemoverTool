@@ -15,5 +15,8 @@
 #include <leptonica/allheaders.h>
 #include <locale>
 #include <codecvt>
-#include <shobjidl.h> 
-#include <d2d1.h>
+#include <shobjidl.h>
+#include <opencv2/core/cuda.hpp>
+#include <opencv2/cudaarithm.hpp>
+#include <opencv2/gapi/imgproc.hpp>
+#include <opencv2/cudafilters.hpp>

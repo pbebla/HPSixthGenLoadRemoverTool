@@ -14,7 +14,7 @@
 #define IDC_HPSIXTHGENLOADREMOVERTOOL			109
 #define ID_HWNDBUTTON           111
 #define ID_HWNDBUTTON2           112
-#define ID_HWNDBUTTON3           113
+#define ID_TOGGLE           113
 #define ID_HWNDBUTTON4           114
 #define ID_HWNDBUTTON5           115
 #define ID_START              116
