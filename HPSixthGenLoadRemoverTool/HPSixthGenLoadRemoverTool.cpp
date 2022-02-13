@@ -137,7 +137,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     server = LiveSplitServer();
     isInitialLoad = true;
     showPreview = true;
-    hasCuda = (cv::cuda::getCudaEnabledDeviceCount() > 0);
+    cv::cuda::DeviceInfo dInfo;
+    hasCuda = (cv::cuda::getCudaEnabledDeviceCount() > 0 && dInfo.isCompatible());
+    DBOUT("can use cuda?: " << hasCuda << std::endl);
     if (!InitInstance (hInstance, nCmdShow))
     {
         return FALSE;
@@ -888,9 +890,15 @@ done:
 
 DWORD WINAPI LoadRemover(LPVOID lpParam)
 {
+    using std::chrono::operator""ms;
     float ret;
+    int frames = 0;
     while (isThreadWorking) {
-        CaptureAnImage(hwndPreviewCanvas, selHwnd, true);
+        auto start = std::chrono::steady_clock::now();
+        auto duration = start + 3ms;
+        if (showPreview) {
+            CaptureAnImage(hwndPreviewCanvas, selHwnd, true);
+        }
         if (!IsRectEmpty(&rcTarget) && convertedWidth > 0 && convertedHeight > 0) {
             GrabMat(selHwnd);
             ret = GetPSNR(selHwnd);
@@ -906,6 +914,8 @@ DWORD WINAPI LoadRemover(LPVOID lpParam)
             server.send_to_ls("unpausegametime\r\n");
             server.set_isLoading(false);
         }
+        std::this_thread::sleep_until(duration);
+        std::chrono::duration<double, std::milli> Elapsed = std::chrono::steady_clock::now() - start;
     }
     return 0;
 }
@@ -1034,6 +1044,7 @@ void SaveFileAs(HWND hwnd) {
                 {L".dat", L"*.dat;"},
             };
             hr = pFileSaveAs->SetFileTypes(ARRAYSIZE(rgSpec), rgSpec);
+            hr = pFileSaveAs->SetDefaultExtension(L".dat");
             hr = pFileSaveAs->Show(NULL);
             if (SUCCEEDED(hr)) {
                 IShellItem* pItem;
