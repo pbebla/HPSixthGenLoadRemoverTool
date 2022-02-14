@@ -1,16 +1,8 @@
 // HPSixthGenLoadRemoverTool.cpp : Defines the entry point for the application.
 //
 
-
-#include "framework.h"
 #include "HPSixthGenLoadRemoverTool.h"
 #include "LiveSplitServer.h"
-#pragma comment(lib, "ComCtl32.Lib")
-#pragma comment (lib, "Psapi.lib")
-#pragma comment (lib,"Gdiplus.lib")
-#pragma comment(linker,"\"/manifestdependency:type='win32' \
-name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
-processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 #define BITS_PER_PIXEL   32
 #define BYTES_PER_PIXEL  (BITS_PER_PIXEL / 8)
 #define CANVAS_WIDTH 480
