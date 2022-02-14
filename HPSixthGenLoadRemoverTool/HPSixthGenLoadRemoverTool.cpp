@@ -1218,14 +1218,23 @@ void GrabMat(HWND hwnd) {
 }
 
 void RenderRefImage(HWND hwnd) {
-    InvalidateRect(hwnd, NULL, true);
-    refBmp = new Gdiplus::Bitmap(filePath);
-    std::wstringstream ss;
-    ss << filePath;
-    std::string str;
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> ccvt;
-    str = ccvt.to_bytes(ss.str());
-    refMat = cv::imread(str);
+    int size = WideCharToMultiByte(CP_UTF8, 0, filePath, -1, NULL, 0, NULL, NULL);
+    char* chars = new char[size];
+
+    if (WideCharToMultiByte(CP_UTF8, 0, filePath, -1, chars, size, NULL, NULL) == size) {
+        InvalidateRect(hwnd, NULL, true);
+
+        if (refBmp == nullptr) {
+            delete refBmp;
+            refBmp = nullptr;
+        }
+
+        refBmp = new Gdiplus::Bitmap(filePath);
+
+        refMat = cv::imread(cv::String(chars));
+    }
+
+    delete[] chars;
 }
 
 void CalculateDim() {
