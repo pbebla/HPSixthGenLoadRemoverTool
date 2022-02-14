@@ -10,9 +10,6 @@
 #include <commctrl.h>
 #include <tchar.h>
 #include <map>
-#include <tesseract/baseapi.h>
-#include <tesseract/renderer.h>
-#include <leptonica/allheaders.h>
 #include <locale>
 #include <codecvt>
 #include <shobjidl.h>
