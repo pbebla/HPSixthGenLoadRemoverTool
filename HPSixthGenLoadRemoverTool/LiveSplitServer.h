@@ -1,23 +1,12 @@
 #pragma once
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
 
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <iphlpapi.h>
-#include <stdio.h>
+#include "HPSixthGenLoadRemoverTool.h"
+#include <cstdio>
 #include <exception>
 #include <thread>
 #include <string>
-#include <opencv2/imgproc.hpp>
-#include <opencv2/core/cuda.hpp>
-#include <opencv2/cudaarithm.hpp>
 #include <iostream>
 #include <fstream>
-
-#pragma comment(lib, "Ws2_32.lib")
 
 #define DEFAULT_BUFLEN 512
 class LiveSplitServer
